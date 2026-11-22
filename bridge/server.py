@@ -28,6 +28,22 @@ PING_EVERY = 25.0
 DEAD_AFTER = 90.0
 
 _db_lock = asyncio.Lock()
+
+
+def _hash(token: str) -> str:
+    import hashlib
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _authorized(token: str) -> bool:
+    if TOKEN and token == TOKEN:
+        return True
+    if not token:
+        return False
+    with db() as conn:
+        row = conn.execute("SELECT 1 FROM devices WHERE token_hash=? AND revoked_at IS NULL",
+                           (_hash(token),)).fetchone()
+    return row is not None
 _devices: dict[str, web.WebSocketResponse] = {}
 _device_seen: dict[str, float] = {}
 
@@ -42,6 +58,10 @@ def db() -> sqlite3.Connection:
 def init_db() -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
     with db() as conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS devices(
+                   token_hash TEXT PRIMARY KEY, device TEXT, created_at REAL, revoked_at REAL)""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS pair_codes(
+                   code TEXT PRIMARY KEY, device TEXT, expires_at REAL, used_at REAL)""")
         conn.execute(
             """CREATE TABLE IF NOT EXISTS jobs(
                    id TEXT PRIMARY KEY, device TEXT, text TEXT, session TEXT,
@@ -57,7 +77,8 @@ def job_row(conn: sqlite3.Connection, job_id: str) -> dict[str, Any] | None:
 
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     auth = request.headers.get("Authorization", "")
-    if TOKEN and auth != f"Bearer {TOKEN}":
+    token = auth[7:] if auth.startswith("Bearer ") else request.query.get("token", "")
+    if not _authorized(token):
         return web.Response(status=401, text="bad token")
     device = request.query.get("device") or request.headers.get("X-Device") or "default"
     ws = web.WebSocketResponse(heartbeat=None, max_msg_size=1024 * 1024)
@@ -173,6 +194,29 @@ async def get_job(request: web.Request) -> web.Response:
         await asyncio.sleep(0.5)
 
 
+async def pair(request: web.Request) -> web.Response:
+    import secrets
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "json body required"}, status=400)
+    code = str(body.get("code") or "").strip().upper()
+    device = str(body.get("device") or "default")[:64]
+    if not code:
+        return web.json_response({"error": "code required"}, status=400)
+    now = time.time()
+    async with _db_lock:
+        with db() as conn:
+            row = conn.execute("SELECT * FROM pair_codes WHERE code=?", (code,)).fetchone()
+            if row is None or row["used_at"] is not None or row["expires_at"] < now:
+                return web.json_response({"error": "invalid or expired code"}, status=403)
+            token = secrets.token_urlsafe(32)
+            conn.execute("UPDATE pair_codes SET used_at=? WHERE code=?", (now, code))
+            conn.execute("INSERT OR REPLACE INTO devices(token_hash, device, created_at) VALUES(?,?,?)",
+                         (_hash(token), device, now))
+    return web.json_response({"token": token, "device": device})
+
+
 async def healthz(_: web.Request) -> web.Response:
     return web.json_response({"ok": True, "devices": sorted(_devices),
                               "device_count": len(_devices)})
@@ -199,6 +243,7 @@ def main() -> None:
     app.router.add_get("/agent-bridge", ws_handler)
     app.router.add_post("/v1/jobs", create_job)
     app.router.add_get("/v1/jobs/{job_id}", get_job)
+    app.router.add_post("/pair", pair)
     app.router.add_get("/healthz", healthz)
 
     async def _start_background(_app: web.Application) -> None:

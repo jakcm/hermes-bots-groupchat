@@ -6,11 +6,14 @@
  *   $HERMES_BRIDGE_CONFIG
  *   ~/.dsh/hermes-bridge.json
  *   config.json next to this file
- * Shape: { "url": "wss://host/path", "token": "...", "device": "phone",
- *          "dsh_bin": "dsh", "profile": "headless", "timeout_s": 900 }
+ *
+ * First run may use a one-time pairing code instead of a token:
+ *   { "url": "wss://host/hermes/agent-bridge/?device=phone", "code": "ABCD2345" }
+ * The plugin exchanges the code for a device token, stores it in the same file
+ * (mode 600), and reuses it afterwards.
  */
 import { spawn } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,15 +25,49 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const DEFAULTS = { device: 'phone', dsh_bin: 'dsh', profile: 'headless', timeout_s: 900 }
 const ACTIVE = new Set()
 
+function configPaths() {
+  return [process.env.HERMES_BRIDGE_CONFIG, join(homedir(), '.dsh', 'hermes-bridge.json'),
+          join(HERE, 'config.json')].filter(Boolean)
+}
+
 function loadConfig() {
-  const paths = [process.env.HERMES_BRIDGE_CONFIG, join(homedir(), '.dsh', 'hermes-bridge.json'),
-                 join(HERE, 'config.json')].filter(Boolean)
-  for (const p of paths) {
+  for (const path of configPaths()) {
     try {
-      return { ...DEFAULTS, ...JSON.parse(readFileSync(p, 'utf8')) }
+      return { path, config: { ...DEFAULTS, ...JSON.parse(readFileSync(path, 'utf8')) } }
     } catch { /* try next */ }
   }
-  return { ...DEFAULTS }
+  return { path: configPaths()[1], config: { ...DEFAULTS } }
+}
+
+function saveConfig(path, cfg) {
+  const { path: _ignore, ...clean } = cfg
+  writeFileSync(path, JSON.stringify(clean, null, 2) + '\n', { mode: 0o600 })
+}
+
+function pairUrl(wsUrl) {
+  const u = new URL(wsUrl)
+  u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:'
+  u.pathname = u.pathname.replace(/\/?$/, '/') + 'pair'
+  u.search = ''
+  return u.toString()
+}
+
+async function ensureToken(state) {
+  const { config: cfg } = state
+  if (cfg.token) return cfg.token
+  if (!cfg.code) return ''
+  const res = await fetch(pairUrl(cfg.url), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: cfg.code, device: cfg.device }),
+  })
+  if (!res.ok) throw new Error(`pair failed: ${res.status} ${await res.text()}`)
+  const data = await res.json()
+  if (!data.token) throw new Error('pair failed: no token')
+  cfg.token = data.token
+  delete cfg.code
+  try { saveConfig(state.path, cfg) } catch (e) { console.error('[hermes-bridge] cannot persist token:', e?.message || e) }
+  return cfg.token
 }
 
 function runDsh(cfg, text) {
@@ -63,16 +100,27 @@ function runDsh(cfg, text) {
 }
 
 export function apply() {
-  const cfg = loadConfig()
+  const state = loadConfig()
+  const cfg = state.config
   if (!cfg.url) {
     console.error('[hermes-bridge] no config (url missing); plugin idle')
     return
   }
   let stopped = false
   let backoff = 1000
-  const connect = () => {
+
+  const connect = async () => {
     if (stopped) return
-    const ws = new WebSocket(cfg.url, { headers: { Authorization: `Bearer ${cfg.token || ''}` } })
+    let token = ''
+    try {
+      token = await ensureToken(state)
+    } catch (e) {
+      console.error('[hermes-bridge]', e?.message || e)
+      setTimeout(connect, backoff)
+      backoff = Math.min(backoff * 2, 60000)
+      return
+    }
+    const ws = new WebSocket(cfg.url, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
     ws.addEventListener('open', () => {
       backoff = 1000
       ws.send(JSON.stringify({ t: 'hello', device: cfg.device, ver: 1 }))
@@ -102,6 +150,7 @@ export function apply() {
     ws.addEventListener('close', retry)
     ws.addEventListener('error', () => { try { ws.close() } catch { /* noop */ } })
   }
+
   connect()
   return () => { stopped = true }
 }

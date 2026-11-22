@@ -10,13 +10,23 @@ installed through the local engine's terminal.
 curl -fsSL https://raw.githubusercontent.com/jakcm/hermes-bots-groupchat/main/scripts/phone-install.sh | sh
 ```
 
-With a bridge configured:
+With a bridge configured, prefer a **one-time pairing code** (no long-lived
+secret is typed):
 
 ```sh
-BRIDGE_URL='wss://<host>/hermes/agent-bridge/?device=phone' \
-BRIDGE_TOKEN='<token>' \
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/jakcm/hermes-bots-groupchat/main/scripts/phone-install.sh)"
+# on the cloud: prints an 8-char code, valid 10 minutes, single use
+python3 bridge/pair.py --device phone
 ```
+
+Then on the phone write only the URL and the code:
+
+```json
+{ "url": "wss://<host>/hermes/agent-bridge/?device=phone", "code": "ABCD2345" }
+```
+
+at `~/.dsh/hermes-bridge.json`. On first connect the plugin calls
+`POST /hermes/agent-bridge/pair`, receives a device token, and stores it back in
+the same file (mode 600).
 
 3. Restart the engine.
 4. Verify: `dsh --profile web --dump-config | grep hermes-bridge` should show the

@@ -99,6 +99,18 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     for row in rows:
         await ws.send_json({"t": "job", "id": row["id"], "text": row["text"],
                             "session": row["session"], "deadline": JOB_TTL})
+    async with _db_lock:
+        with db() as conn:
+            queued = conn.execute(
+                "SELECT * FROM jobs WHERE state='queued' AND (device='' OR device=? OR device='default') ORDER BY created_at LIMIT 20",
+                (device,)).fetchall()
+    for row in queued:
+        await ws.send_json({"t": "job", "id": row["id"], "text": row["text"],
+                            "session": row["session"], "deadline": JOB_TTL})
+        async with _db_lock:
+            with db() as conn:
+                conn.execute("UPDATE jobs SET state='dispatched', device=?, updated_at=? WHERE id=?",
+                             (device, time.time(), row["id"]))
     try:
         async for msg in ws:
             if msg.type != WSMsgType.TEXT:
@@ -132,7 +144,10 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 
 
 async def _dispatch(job: dict[str, Any]) -> bool:
-    ws = _devices.get(job.get("device") or "default")
+    wanted = job.get("device") or ""
+    ws = _devices.get(wanted)
+    if ws is None and wanted in ("", "default") and len(_devices) == 1:
+        ws = next(iter(_devices.values()))
     if ws is None or ws.closed:
         return False
     await ws.send_json({"t": "job", "id": job["id"], "text": job["text"],
@@ -150,8 +165,6 @@ async def create_job(request: web.Request) -> web.Response:
     if not text:
         return web.json_response({"error": "text required"}, status=400)
     device = str(body.get("device") or "")
-    if not device:
-        device = next(iter(_devices)) if len(_devices) == 1 else "default"
     session = str(body.get("session") or "")
     job_id = str(body.get("id") or uuid.uuid4().hex)
     now = time.time()
@@ -203,9 +216,7 @@ async def pair(request: web.Request) -> web.Response:
     except Exception:
         return web.json_response({"error": "json body required"}, status=400)
     code = str(body.get("code") or "").strip().upper()
-    device = str(body.get("device") or "")
-    if not device:
-        device = next(iter(_devices)) if len(_devices) == 1 else "default"[:64]
+    device = str(body.get("device") or "")[:64]
     if not code:
         return web.json_response({"error": "code required"}, status=400)
     now = time.time()

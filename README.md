@@ -78,3 +78,18 @@ CLI.
   `~/.hermes/.env` (600) and the phone plugin config only.
 - The bridge binds to `127.0.0.1`; nginx is the only public surface.
 - Never commit `.env`, tokens, or built tarballs (see `.gitignore`).
+
+## 50-minute task profile (3000s)
+
+| layer | value |
+|---|---|
+| `~/.hermes/config.yaml` → `timeouts.mcp.tool_call` | `3050` |
+| `hermes-dashboard.service` → `HERMES_AGENT_TIMEOUT` | `3000` (room turn = `3030`) |
+| `bridge/mcp_dsh.py` default `timeout` | `2970` |
+| bridge `/v1/jobs` long-poll cap | `3100` |
+| phone `~/.dsh/hermes-bridge.json` → `timeout_s` | `3010` |
+| bridge `JOB_TTL` | `3600` (10 min headroom) |
+
+Restart `hermes-dashboard` (env change) and `hermes-bridge` (code change) after editing.
+`HERMES_AGENT_TIMEOUT` is the gateway's *inactivity* timeout and applies to every
+profile, so stuck turns elsewhere are also reaped only after 50 minutes.

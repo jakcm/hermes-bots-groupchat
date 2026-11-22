@@ -16,7 +16,7 @@ TOOL = {
         "properties": {
             "text": {"type": "string", "description": "Task text for the phone agent."},
             "session": {"type": "string", "description": "Optional session key for continuity."},
-            "timeout": {"type": "integer", "description": "Seconds to wait (default 120)."},
+            "timeout": {"type": "integer", "description": "Seconds to wait (default 2970, i.e. ~50 minutes)."},
         },
         "required": ["text"],
     },
@@ -40,7 +40,7 @@ def dsh_turn(args: dict) -> str:
     text = str(args.get("text") or "").strip()
     if not text:
         raise ValueError("text is required")
-    timeout = int(args.get("timeout") or 120)
+    timeout = int(args.get("timeout") or 2970)
     job = post(f"/v1/jobs?wait=5", {"text": text, "session": args.get("session") or ""})
     job_id = job.get("id")
     if not job_id:

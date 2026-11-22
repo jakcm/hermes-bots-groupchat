@@ -181,7 +181,7 @@ async def create_job(request: web.Request) -> web.Response:
                 job = existing
     if job and job["state"] == "queued":
         await _dispatch(job)
-    wait = min(float(request.query.get("wait", "0") or 0), 300)
+    wait = min(float(request.query.get("wait", "0") or 0), 3100)
     if wait:
         deadline = time.monotonic() + wait
         while time.monotonic() < deadline:
@@ -196,7 +196,7 @@ async def create_job(request: web.Request) -> web.Response:
 
 async def get_job(request: web.Request) -> web.Response:
     job_id = request.match_info["job_id"]
-    wait = min(float(request.query.get("wait", "0") or 0), 300)
+    wait = min(float(request.query.get("wait", "0") or 0), 3100)
     deadline = time.monotonic() + wait
     while True:
         async with _db_lock:

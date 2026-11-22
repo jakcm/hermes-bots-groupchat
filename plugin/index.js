@@ -72,13 +72,11 @@ function runInEngine(ctx, cfg, text) {
     const created = await ctx.sessionController.create({ cwd })
     const sessionId = created?.sessionId || created?.id
     if (!sessionId) return { ok: false, text: 'sessionController.create returned no sessionId' }
-    const resolved = await ctx.sessionController.resolveAgent(sessionId)
-    const agent = resolved?.agent ?? resolved
-    if (!agent || typeof agent.followup !== 'function') return { ok: false, text: 'no agent for session' }
-    return await new Promise(resolve => {
+    console.error('[hermes-bridge] session', sessionId)
+
+    const done = new Promise(resolve => {
       const timer = setTimeout(() => { PENDING.delete(sessionId); resolve({ ok: false, text: 'timeout' }) }, timeoutMs)
       PENDING.set(sessionId, { chunks: [], resolve, timer })
-      console.error('[hermes-bridge] session', sessionId, 'agent', !!agent)
       // Fallback for engines whose turn events differ: poll the session page.
       const poll = setInterval(async () => {
         const cur = PENDING.get(sessionId)
@@ -101,19 +99,24 @@ function runInEngine(ctx, cfg, text) {
         } catch { /* page not ready */ }
       }, 800)
       curPoll.set(sessionId, poll)
-      try {
-        // The same call DS-Bot's /api/bot handler uses for "send" (channel.js).
-        await ctx.sessionController.prompt({
-          requestId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-          sessionId,
-          mode: 'queue',
-          content: [{ type: 'text', text }],
-        }, AbortSignal.timeout(timeoutMs))
-        console.error('[hermes-bridge] prompt accepted', sessionId)
-      } catch (e) {
-        clearTimeout(timer); PENDING.delete(sessionId); resolve({ ok: false, text: String(e?.message || e) })
-      }
     })
+
+    try {
+      // The same call DS-Bot's /api/bot handler uses for "send" (channel.js).
+      await ctx.sessionController.prompt({
+        requestId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        sessionId,
+        mode: 'queue',
+        content: [{ type: 'text', text }],
+      }, AbortSignal.timeout(timeoutMs))
+      console.error('[hermes-bridge] prompt accepted', sessionId)
+    } catch (e) {
+      const pending = PENDING.get(sessionId)
+      if (pending) { clearTimeout(pending.timer); PENDING.delete(sessionId) }
+      const p = curPoll.get(sessionId); if (p) { clearInterval(p); curPoll.delete(sessionId) }
+      return { ok: false, text: String(e?.message || e) }
+    }
+    return await done
   })()
 }
 

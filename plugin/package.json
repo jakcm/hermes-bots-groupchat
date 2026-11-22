@@ -3,8 +3,20 @@
   "version": "0.1.0",
   "type": "module",
   "main": "index.js",
-  "files": ["index.js", "cordis.patch.yml"],
-  "keywords": ["dsh-plugin"],
-  "engines": { "dsh": ">=0.2.0 <0.4.0" },
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "config.example.json"
+  ],
+  "keywords": [
+    "dsh-plugin"
+  ],
+  "engines": {
+    "dsh": ">=0.2.0 <0.4.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
 }

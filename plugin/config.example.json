@@ -1,0 +1,8 @@
+{
+  "url": "wss://your-host/hermes/agent-bridge/?device=phone",
+  "token": "<bridge token>",
+  "device": "phone",
+  "dsh_bin": "dsh",
+  "profile": "headless",
+  "timeout_s": 900
+}

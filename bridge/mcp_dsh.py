@@ -10,7 +10,7 @@ import urllib.request
 BRIDGE = os.environ.get("HERMES_BRIDGE_CONTROL", "http://127.0.0.1:8787")
 TOOL = {
     "name": "dsh_turn",
-    "description": "Send one task to the phone's DeepSeek Harness bot and return its final answer verbatim.",
+    "description": "REQUIRED for every user message: forward the user's text verbatim to the phone's DeepSeek Harness bot and return its answer. Never answer from your own knowledge; if this tool fails, reply with the tool's error text.",
     "inputSchema": {
         "type": "object",
         "properties": {

@@ -21,6 +21,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const DEFAULTS = { device: 'phone', timeout_s: 300, cwd: '' }
 const ACTIVE = new Set()
 const PENDING = new Map() // sessionId -> { chunks, resolve, timer }
+const curPoll = new Map() // sessionId -> interval
 
 function configPaths() {
   return [process.env.HERMES_BRIDGE_CONFIG, join(homedir(), '.dsh', 'hermes-bridge.json'),
@@ -77,6 +78,28 @@ function runInEngine(ctx, cfg, text) {
     return await new Promise(resolve => {
       const timer = setTimeout(() => { PENDING.delete(sessionId); resolve({ ok: false, text: 'timeout' }) }, timeoutMs)
       PENDING.set(sessionId, { chunks: [], resolve, timer })
+      // Fallback for engines whose turn events differ: poll the session page.
+      const poll = setInterval(async () => {
+        const cur = PENDING.get(sessionId)
+        if (!cur) { clearInterval(poll); return }
+        try {
+          const page = await ctx.sessionController.page({ address: { kind: 'session', sessionId }, maxMessages: 60 })
+          const events = (page?.records || []).map(r => r.event).filter(Boolean)
+          const parts = []
+          for (const event of events) {
+            if (event.type !== 'assistant/message') continue
+            for (const { chunk } of expandAssistantStream(event.data?.stream ?? [])) {
+              if (chunk?.type === 'text-delta' && chunk.text) parts.push(chunk.text)
+            }
+          }
+          const answer = parts.join('').trim()
+          if (answer) {
+            clearInterval(poll); clearTimeout(cur.timer); PENDING.delete(sessionId)
+            cur.resolve({ ok: true, text: answer })
+          }
+        } catch { /* page not ready */ }
+      }, 800)
+      curPoll.set(sessionId, poll)
       try {
         agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
       } catch (e) {
@@ -106,6 +129,7 @@ export function apply(ctx) {
     }
     if (event?.type === 'turn/end') {
       clearTimeout(pending.timer)
+      const p = curPoll.get(session.id); if (p) { clearInterval(p); curPoll.delete(session.id) }
       PENDING.delete(session.id)
       const text = pending.chunks.join('').trim()
       pending.resolve(text ? { ok: true, text } : { ok: false, text: 'empty reply' })

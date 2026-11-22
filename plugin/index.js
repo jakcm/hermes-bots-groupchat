@@ -20,9 +20,15 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const DEFAULTS = { device: 'phone', timeout_s: 300, cwd: '' }
 const ACTIVE = new Set()
 
-function streamText(stream) {
+function messageText(data) {
+  // assistant/message carries the committed message: { message: { content: [{type:'text', text}] } }
+  const content = data?.message?.content
+  if (Array.isArray(content)) {
+    return content.filter(part => part?.type === 'text' && part.text).map(part => part.text).join('')
+  }
+  // fall back to a streamed shape if a build emits chunks instead
   const out = []
-  for (const item of stream || []) {
+  for (const item of data?.stream || []) {
     const chunk = item?.chunk ?? item
     if (chunk?.type === 'text-delta' && chunk.text) out.push(chunk.text)
     else if (chunk?.type === 'text' && typeof chunk.text === 'string') out.push(chunk.text)
@@ -99,7 +105,7 @@ function runInEngine(ctx, cfg, text) {
           const parts = []
           for (const event of events) {
             if (event.type !== 'assistant/message') continue
-            const text = streamText(event.data?.stream)
+            const text = messageText(event.data)
             if (text) parts.push(text)
           }
           const answer = parts.join('').trim()
@@ -146,9 +152,8 @@ export function apply(ctx) {
     const pending = PENDING.get(session?.id)
     if (!pending) return
     log('event', event?.type || '?')
-    if (event?.type === 'assistant/message') log('data', JSON.stringify(event.data).slice(0, 500))
     if (event?.type === 'assistant/message' || event?.type === 'assistant/attempt') {
-      const text = streamText(event.data?.stream)
+      const text = messageText(event.data)
       if (text) pending.chunks.push(text)
     }
     if (event?.type === 'turn/end') {

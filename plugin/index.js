@@ -146,6 +146,7 @@ export function apply(ctx) {
     const pending = PENDING.get(session?.id)
     if (!pending) return
     log('event', event?.type || '?')
+    if (event?.type === 'assistant/message') log('data', JSON.stringify(event.data).slice(0, 500))
     if (event?.type === 'assistant/message' || event?.type === 'assistant/attempt') {
       const text = streamText(event.data?.stream)
       if (text) pending.chunks.push(text)

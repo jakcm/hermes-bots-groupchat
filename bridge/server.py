@@ -62,12 +62,16 @@ def init_db() -> None:
                    token_hash TEXT PRIMARY KEY, device TEXT, created_at REAL, revoked_at REAL)""")
         conn.execute("""CREATE TABLE IF NOT EXISTS pair_codes(
                    code TEXT PRIMARY KEY, device TEXT, expires_at REAL, used_at REAL)""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS jobs_meta_marker(x INTEGER)""")
         conn.execute(
             """CREATE TABLE IF NOT EXISTS jobs(
                    id TEXT PRIMARY KEY, device TEXT, text TEXT, session TEXT,
                    state TEXT, result TEXT, error TEXT,
-                   created_at REAL, updated_at REAL, expires_at REAL)"""
+                   created_at REAL, updated_at REAL, expires_at REAL, deadline_at REAL)"""
         )
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+        if "deadline_at" not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN deadline_at REAL")
 
 
 def job_row(conn: sqlite3.Connection, job_id: str) -> dict[str, Any] | None:
@@ -172,10 +176,15 @@ async def create_job(request: web.Request) -> web.Response:
         with db() as conn:
             existing = job_row(conn, job_id)
             if existing is None:
+                try:
+                    budget = float(body.get("timeout") or JOB_TTL)
+                except (TypeError, ValueError):
+                    budget = JOB_TTL
+                budget = max(5.0, min(budget, JOB_TTL))
                 conn.execute(
-                    "INSERT INTO jobs(id,device,text,session,state,created_at,updated_at,expires_at)"
-                    " VALUES(?,?,?,?, 'queued', ?,?,?)",
-                    (job_id, device, text, session, now, now, now + JOB_TTL))
+                    "INSERT INTO jobs(id,device,text,session,state,created_at,updated_at,expires_at,deadline_at)"
+                    " VALUES(?,?,?,?, 'queued', ?,?,?,?)",
+                    (job_id, device, text, session, now, now, now + JOB_TTL, now + budget + 10))
                 job = job_row(conn, job_id)
             else:
                 job = existing
@@ -237,17 +246,44 @@ async def healthz(_: web.Request) -> web.Response:
                               "device_count": len(_devices)})
 
 
+_gone_since: dict[str, float] = {}
+
+
 async def reaper() -> None:
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(15)
         now = time.time()
         for device, ws in list(_devices.items()):
             if ws.closed or now - _device_seen.get(device, 0) > DEAD_AFTER:
                 _devices.pop(device, None)
                 if not ws.closed:
                     await ws.close(code=4002, message=b"heartbeat timeout")
+            else:
+                try:
+                    await ws.send_json({"t": "ping"})
+                except Exception:
+                    _devices.pop(device, None)
         async with _db_lock:
             with db() as conn:
+                conn.execute(
+                    "UPDATE jobs SET state='failed', error='deadline exceeded', updated_at=?"
+                    " WHERE state IN ('queued','dispatched','running')"
+                    " AND COALESCE(deadline_at, expires_at) < ?", (now, now))
+                rows = conn.execute(
+                    "SELECT DISTINCT device FROM jobs WHERE state IN ('dispatched','running')").fetchall()
+                for row in rows:
+                    dev = row["device"] or ""
+                    live = dev in _devices or (dev in ("", "default") and len(_devices) == 1)
+                    if live:
+                        _gone_since.pop(dev, None)
+                        continue
+                    since = _gone_since.setdefault(dev, now)
+                    if now - since >= 120:
+                        conn.execute(
+                            "UPDATE jobs SET state='failed', error=?, updated_at=?"
+                            " WHERE device=? AND state IN ('dispatched','running')",
+                            (f"device '{dev}' offline for {int(now - since)}s", now, dev))
+                        _gone_since.pop(dev, None)
                 conn.execute("DELETE FROM jobs WHERE expires_at < ? AND state IN ('done','failed')", (now - 86400,))
 
 

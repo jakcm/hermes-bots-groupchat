@@ -8,7 +8,7 @@
  *     "token": "...",               // written back automatically
  *     "cwd": "/root", "timeout_s": 300 }
  */
-import { readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,6 +20,8 @@ export const inject = ['sessionController']
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DEFAULTS = { device: 'phone', timeout_s: 300, cwd: '' }
 const ACTIVE = new Set()
+const LOG = join(homedir(), '.dsh', 'hermes-bridge-debug.log')
+const log = (...a) => { try { appendFileSync(LOG, new Date().toISOString() + ' ' + a.join(' ') + '\n') } catch { /* ignore */ } }
 const PENDING = new Map() // sessionId -> { chunks, resolve, timer }
 const curPoll = new Map() // sessionId -> interval
 
@@ -73,6 +75,7 @@ function runInEngine(ctx, cfg, text) {
     const sessionId = created?.sessionId || created?.id
     if (!sessionId) return { ok: false, text: 'sessionController.create returned no sessionId' }
     console.error('[hermes-bridge] session', sessionId)
+    log('session', sessionId)
 
     const done = new Promise(resolve => {
       const timer = setTimeout(() => { PENDING.delete(sessionId); resolve({ ok: false, text: 'timeout' }) }, timeoutMs)
@@ -93,6 +96,7 @@ function runInEngine(ctx, cfg, text) {
           }
           const answer = parts.join('').trim()
           if (answer) {
+            log('page answer', answer.slice(0,120))
             clearInterval(poll); clearTimeout(cur.timer); PENDING.delete(sessionId)
             cur.resolve({ ok: true, text: answer })
           }
@@ -110,10 +114,12 @@ function runInEngine(ctx, cfg, text) {
         content: [{ type: 'text', text }],
       }, AbortSignal.timeout(timeoutMs))
       console.error('[hermes-bridge] prompt accepted', sessionId)
+      log('prompt accepted', sessionId)
     } catch (e) {
       const pending = PENDING.get(sessionId)
       if (pending) { clearTimeout(pending.timer); PENDING.delete(sessionId) }
       const p = curPoll.get(sessionId); if (p) { clearInterval(p); curPoll.delete(sessionId) }
+      log('prompt error', String(e?.message || e))
       return { ok: false, text: String(e?.message || e) }
     }
     return await done
@@ -131,6 +137,7 @@ export function apply(ctx) {
   ctx.on('session/event', (session, event) => {
     const pending = PENDING.get(session?.id)
     if (!pending) return
+    log('event', event?.type || '?')
     if (event?.type === 'assistant/message' || event?.type === 'assistant/attempt') {
       try {
         for (const { chunk } of expandAssistantStream(event.data?.stream ?? [])) {
@@ -168,6 +175,7 @@ export function apply(ctx) {
       if (msg.t === 'ping') { ws.send(JSON.stringify({ t: 'pong' })); return }
       if (msg.t !== 'job' || ACTIVE.has(msg.id)) return
       ACTIVE.add(msg.id)
+      log('job', msg.id, JSON.stringify(msg.text))
       try {
         ws.send(JSON.stringify({ t: 'ack', id: msg.id }))
         const res = await runInEngine(ctx, cfg, msg.text)

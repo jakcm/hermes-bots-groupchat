@@ -97,7 +97,8 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     async with _db_lock:
         with db() as conn:
             rows = conn.execute(
-                "SELECT * FROM jobs WHERE device=? AND state='dispatched' ORDER BY created_at",
+                "SELECT * FROM jobs WHERE state='dispatched'"
+                " AND (device='' OR device='default' OR device=?) ORDER BY created_at",
                 (device,),
             ).fetchall()
     for row in rows:
@@ -269,6 +270,12 @@ async def reaper() -> None:
                     "UPDATE jobs SET state='failed', error='deadline exceeded', updated_at=?"
                     " WHERE state IN ('queued','dispatched','running')"
                     " AND COALESCE(deadline_at, expires_at) < ?", (now, now))
+                # dispatched but never acked for 60s -> requeue once
+                stale = conn.execute(
+                    "SELECT * FROM jobs WHERE state='dispatched' AND updated_at < ? LIMIT 5",
+                    (now - 60,)).fetchall()
+                for row in stale:
+                    conn.execute("UPDATE jobs SET state='queued', updated_at=? WHERE id=?", (now, row["id"]))
                 rows = conn.execute(
                     "SELECT DISTINCT device FROM jobs WHERE state IN ('dispatched','running')").fetchall()
                 for row in rows:

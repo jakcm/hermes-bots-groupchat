@@ -78,6 +78,7 @@ function runInEngine(ctx, cfg, text) {
     return await new Promise(resolve => {
       const timer = setTimeout(() => { PENDING.delete(sessionId); resolve({ ok: false, text: 'timeout' }) }, timeoutMs)
       PENDING.set(sessionId, { chunks: [], resolve, timer })
+      console.error('[hermes-bridge] session', sessionId, 'agent', !!agent)
       // Fallback for engines whose turn events differ: poll the session page.
       const poll = setInterval(async () => {
         const cur = PENDING.get(sessionId)
@@ -101,7 +102,14 @@ function runInEngine(ctx, cfg, text) {
       }, 800)
       curPoll.set(sessionId, poll)
       try {
-        agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
+        // The same call DS-Bot's /api/bot handler uses for "send" (channel.js).
+        await ctx.sessionController.prompt({
+          requestId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          sessionId,
+          mode: 'queue',
+          content: [{ type: 'text', text }],
+        }, AbortSignal.timeout(timeoutMs))
+        console.error('[hermes-bridge] prompt accepted', sessionId)
       } catch (e) {
         clearTimeout(timer); PENDING.delete(sessionId); resolve({ ok: false, text: String(e?.message || e) })
       }

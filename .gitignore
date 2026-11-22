@@ -1,0 +1,22 @@
+# build artifacts / local state
+node_modules/
+*.tgz
+dist/
+build/
+bridge/queue.db
+bridge/queue.db-*
+*.log
+
+# secrets — never commit
+.env
+.env.*
+*.token
+token
+secrets/
+config.local.json
+plugin/config.json
+bridge/token
+
+# python
+__pycache__/
+*.pyc

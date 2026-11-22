@@ -51,6 +51,20 @@ Requires `aiohttp` (already present in the Hermes runtime venv).
 2. `hermes mcp add dsh-bridge --command <repo>/bridge/mcp_dsh.py`
 3. `hermes profile create dshphone` (or reuse an existing profile) and enable the MCP server.
 
+## How a job runs on the phone
+
+The plugin lives inside the DSH engine, so it does not spawn `dsh headless` (that
+profile has no model credentials). It drives the engine directly:
+
+1. `sessionController.create({ cwd })` → `sessionId`
+2. `sessionController.prompt({ sessionId, mode: 'queue', content: [...] })`
+   — the same call DS-Bot's `/api/bot` `send` handler uses
+3. the reply is read from the `assistant/message` event:
+   `event.data.message.content[].text` (with a `sessionController.page` poll as
+   a fallback)
+
+Verified on device: `1+1=?` → `2`.
+
 ## Phone
 
 The plugin is installable only through DSH's own plugin manager (the App market

@@ -12,7 +12,6 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createUserMessage, expandAssistantStream } from '@deepseek-ai/dsh-llm'
 
 export const name = 'hermes-bridge'
 export const inject = ['sessionController']
@@ -20,6 +19,16 @@ export const inject = ['sessionController']
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DEFAULTS = { device: 'phone', timeout_s: 300, cwd: '' }
 const ACTIVE = new Set()
+
+function streamText(stream) {
+  const out = []
+  for (const item of stream || []) {
+    const chunk = item?.chunk ?? item
+    if (chunk?.type === 'text-delta' && chunk.text) out.push(chunk.text)
+    else if (chunk?.type === 'text' && typeof chunk.text === 'string') out.push(chunk.text)
+  }
+  return out.join('')
+}
 const LOG = join(homedir(), '.dsh', 'hermes-bridge-debug.log')
 const log = (...a) => { try { appendFileSync(LOG, new Date().toISOString() + ' ' + a.join(' ') + '\n') } catch { /* ignore */ } }
 const PENDING = new Map() // sessionId -> { chunks, resolve, timer }
@@ -90,9 +99,8 @@ function runInEngine(ctx, cfg, text) {
           const parts = []
           for (const event of events) {
             if (event.type !== 'assistant/message') continue
-            for (const { chunk } of expandAssistantStream(event.data?.stream ?? [])) {
-              if (chunk?.type === 'text-delta' && chunk.text) parts.push(chunk.text)
-            }
+            const text = streamText(event.data?.stream)
+            if (text) parts.push(text)
           }
           const answer = parts.join('').trim()
           if (answer) {
@@ -139,11 +147,8 @@ export function apply(ctx) {
     if (!pending) return
     log('event', event?.type || '?')
     if (event?.type === 'assistant/message' || event?.type === 'assistant/attempt') {
-      try {
-        for (const { chunk } of expandAssistantStream(event.data?.stream ?? [])) {
-          if (chunk?.type === 'text-delta' && chunk.text) pending.chunks.push(chunk.text)
-        }
-      } catch { /* ignore stream shape drift */ }
+      const text = streamText(event.data?.stream)
+      if (text) pending.chunks.push(text)
     }
     if (event?.type === 'turn/end') {
       clearTimeout(pending.timer)

@@ -149,7 +149,9 @@ async def create_job(request: web.Request) -> web.Response:
     text = str(body.get("text") or "").strip()
     if not text:
         return web.json_response({"error": "text required"}, status=400)
-    device = str(body.get("device") or "default")
+    device = str(body.get("device") or "")
+    if not device:
+        device = next(iter(_devices)) if len(_devices) == 1 else "default"
     session = str(body.get("session") or "")
     job_id = str(body.get("id") or uuid.uuid4().hex)
     now = time.time()
@@ -201,7 +203,9 @@ async def pair(request: web.Request) -> web.Response:
     except Exception:
         return web.json_response({"error": "json body required"}, status=400)
     code = str(body.get("code") or "").strip().upper()
-    device = str(body.get("device") or "default")[:64]
+    device = str(body.get("device") or "")
+    if not device:
+        device = next(iter(_devices)) if len(_devices) == 1 else "default"[:64]
     if not code:
         return web.json_response({"error": "code required"}, status=400)
     now = time.time()
@@ -241,6 +245,7 @@ def main() -> None:
     print(f"bridge: db ready at {DB_PATH}", flush=True)
     app = web.Application()
     app.router.add_get("/agent-bridge", ws_handler)
+    app.router.add_get("/agent-bridge/", ws_handler)
     app.router.add_post("/v1/jobs", create_job)
     app.router.add_get("/v1/jobs/{job_id}", get_job)
     app.router.add_post("/pair", pair)

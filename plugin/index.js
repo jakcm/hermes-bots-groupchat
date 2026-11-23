@@ -97,6 +97,7 @@ function runInEngine(ctx, cfg, text) {
       log('permission preset before', String(current))
       if (cfg.permission_preset && ctx.permissionPresets?.set) {
         ctx.permissionPresets.set(agent.session, cfg.permission_preset)
+        try { agent.session.append('sandbox/mode', { mode: cfg.permission_preset }) } catch (e) { log('sandbox mode error', String(e?.message || e)) }
         log('permission preset set', cfg.permission_preset, 'now', String(ctx.permissionPresets.current(agent.session)))
       }
     } catch (e) { log('permission preset error', String(e?.message || e)) }

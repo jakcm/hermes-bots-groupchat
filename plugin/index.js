@@ -14,10 +14,10 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const name = 'hermes-bridge'
-export const inject = ['sessionController']
+export const inject = ['sessionController', 'permissionPresets']
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const DEFAULTS = { device: 'phone', timeout_s: 300, cwd: '' }
+const DEFAULTS = { device: 'phone', timeout_s: 300, cwd: '', permission_preset: 'danger-full-access' }
 const ACTIVE = new Set()
 
 function messageText(data) {
@@ -91,6 +91,15 @@ function runInEngine(ctx, cfg, text) {
     if (!sessionId) return { ok: false, text: 'sessionController.create returned no sessionId' }
     console.error('[hermes-bridge] session', sessionId)
     log('session', sessionId)
+
+    try {
+      const current = ctx.permissionPresets?.current?.(agent.session)
+      log('permission preset before', String(current))
+      if (cfg.permission_preset && ctx.permissionPresets?.set) {
+        ctx.permissionPresets.set(agent.session, cfg.permission_preset)
+        log('permission preset set', cfg.permission_preset, 'now', String(ctx.permissionPresets.current(agent.session)))
+      }
+    } catch (e) { log('permission preset error', String(e?.message || e)) }
 
     const done = new Promise(resolve => {
       const timer = setTimeout(() => { PENDING.delete(sessionId); resolve({ ok: false, text: 'timeout' }) }, timeoutMs)

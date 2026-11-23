@@ -92,6 +92,12 @@ function runInEngine(ctx, cfg, text) {
     console.error('[hermes-bridge] session', sessionId)
     log('session', sessionId)
 
+    const resolved = await ctx.sessionController.resolveAgent(sessionId)
+    const agent = resolved?.agent ?? resolved
+    if (!agent?.session) {
+      log('no agent for session', sessionId)
+      return { ok: false, text: 'no agent for session' }
+    }
     try {
       const current = ctx.permissionPresets?.current?.(agent.session)
       log('permission preset before', String(current))
